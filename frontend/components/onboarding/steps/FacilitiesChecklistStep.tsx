@@ -139,6 +139,11 @@ const FacilitiesChecklistStep = React.memo(forwardRef<StepHandle, FacilitiesChec
         const resp = await clientApi.get(`/api/facilities/villa/${villaId}`);
 
         if (!resp.success) {
+          // If backend is offline, silently skip
+          if ((resp as any).offline) {
+            return;
+          }
+          
           // Handle rate limiting once with a single delayed retry
           if ((resp.error || '').toLowerCase().includes('too many requests') && !overlayAppliedRef.current && !overlayRetryRef.current) {
             overlayRetryRef.current = setTimeout(() => {
@@ -186,7 +191,7 @@ const FacilitiesChecklistStep = React.memo(forwardRef<StepHandle, FacilitiesChec
         // Optional: Debug count
         // console.log(`Facilities overlay: fetched=${facilitiesFromDb.length}, matched=${matched}`);
       } catch (e) {
-        console.warn('Failed to fetch facilities from backend as fallback:', e);
+        // Silently handle errors - the app can work without backend data
       }
     })();
 

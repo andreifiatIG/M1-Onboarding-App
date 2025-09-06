@@ -925,22 +925,22 @@ export function mapOnboardingDataFromBackend(step: number, backendData: any) {
     case 9: // Photos
       // Map backend photo data to frontend format
       const mappedPhotos = (backendData.photos || []).map((photo: any) => {
-        // Use the new photo serve endpoint for better compatibility
+        // Use the public photo endpoint for better compatibility (no auth required for images)
         const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4001';
-        const previewUrl = `${API_URL}/api/photos/serve/${photo.id}`;
+        const previewUrl = `${API_URL}/api/photos/public/${photo.id}?t=${Date.now()}`;
         
         return {
           id: photo.id,
           file: null, // No file object for loaded photos
           category: mapPhotoCategoryToFrontend(photo.category),
           subfolder: photo.subfolder || undefined,
-          preview: previewUrl, // Use photo serve endpoint
+          preview: previewUrl, // Use public endpoint with cache buster
           uploaded: true, // Already uploaded to backend
           sharePointId: photo.sharePointFileId,
           sharePointPath: photo.sharePointPath,
           fileName: photo.fileName,
           fileUrl: photo.fileUrl,
-          thumbnailUrl: photo.thumbnailUrl ? `${API_URL}/api/photos/serve/${photo.id}` : undefined,
+          thumbnailUrl: photo.thumbnailUrl ? `${API_URL}/api/photos/public/${photo.id}` : undefined,
           isMain: photo.isMain,
           caption: photo.caption,
           altText: photo.altText,

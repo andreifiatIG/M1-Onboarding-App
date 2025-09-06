@@ -147,9 +147,12 @@ const PhotoUploadStep = forwardRef<StepHandle, PhotoUploadStepProps>((
   ref
 ) => {
   const [photos, setPhotos] = useState<PhotoItem[]>(data?.photos || []);
+  const [isBackendAvailable, setIsBackendAvailable] = useState(true);
   const [bedrooms, setBedrooms] = useState<Bedroom[]>(() => {
     console.log('🛏️ PhotoUploadStep: Initializing bedrooms from data:', data?.bedrooms);
     console.log('🛏️ PhotoUploadStep: Full data object:', data);
+    console.log('🛏️ PhotoUploadStep: Data type:', typeof data?.bedrooms);
+    
     // Parse bedrooms if they come as JSON string from field progress
     if (typeof data?.bedrooms === 'string') {
       try {
@@ -161,7 +164,11 @@ const PhotoUploadStep = forwardRef<StepHandle, PhotoUploadStepProps>((
         return [];
       }
     }
-    return Array.isArray(data?.bedrooms) ? data.bedrooms : [];
+    
+    // Return array if already an array, otherwise empty array
+    const initialBedrooms = Array.isArray(data?.bedrooms) ? data.bedrooms : [];
+    console.log('🛏️ PhotoUploadStep: Initial bedrooms state:', initialBedrooms);
+    return initialBedrooms;
   });
   const [isBedroomModalOpen, setIsBedroomModalOpen] = useState(false);
   const [editingBedroom, setEditingBedroom] = useState<Bedroom | null>(null);
@@ -169,8 +176,28 @@ const PhotoUploadStep = forwardRef<StepHandle, PhotoUploadStepProps>((
   const [selectedSubfolder, setSelectedSubfolder] = useState<string>('');
   const [error, setError] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const { getToken } = useAuth();
+
+  // Check backend availability
+  useEffect(() => {
+    const checkBackend = async () => {
+      try {
+        const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4001';
+        const response = await fetch(`${API_URL}/health`, { method: 'GET' });
+        setIsBackendAvailable(response.ok);
+      } catch (error) {
+        console.warn('Backend health check failed:', error);
+        setIsBackendAvailable(false);
+      }
+    };
+    
+    checkBackend();
+    // Re-check every 30 seconds
+    const interval = setInterval(checkBackend, 30000);
+    return () => clearInterval(interval);
+  }, []);
 
   // Update data when props change - only when data actually changes
   const prevDataRef = useRef(data);
@@ -217,32 +244,32 @@ const PhotoUploadStep = forwardRef<StepHandle, PhotoUploadStepProps>((
       return rest;
     });
     console.log('🛏️ PhotoUploadStep: Calling onUpdate with bedrooms:', bedrooms);
+    console.log('🛏️ PhotoUploadStep: Bedrooms being saved:', JSON.stringify(bedrooms));
     onUpdate({ photos: sanitizedPhotos, bedrooms });
   }, [photos, bedrooms, onUpdate]);
 
   // Debounce the parent update to prevent infinite loops
-  const [updateTimer, setUpdateTimer] = useState<NodeJS.Timeout | null>(null);
+  const updateTimerRef = useRef<NodeJS.Timeout | null>(null);
   
   useEffect(() => {
     // Clear previous timer if it exists
-    if (updateTimer) {
-      clearTimeout(updateTimer);
+    if (updateTimerRef.current) {
+      clearTimeout(updateTimerRef.current);
     }
     
     // Set a new timer to update parent after a short delay
-    const timer = setTimeout(() => {
+    updateTimerRef.current = setTimeout(() => {
+      console.log('🛏️ PhotoUploadStep: Debounced update triggered');
       updateParent();
     }, 500); // 500ms debounce
     
-    setUpdateTimer(timer);
-    
     // Cleanup on unmount
     return () => {
-      if (timer) {
-        clearTimeout(timer);
+      if (updateTimerRef.current) {
+        clearTimeout(updateTimerRef.current);
       }
     };
-  }, [photos, bedrooms]); // Don't include updateParent or updateTimer in deps
+  }, [updateParent]); // Include updateParent in deps for proper updates
 
   const photoCategories: PhotoCategory[] = [
     {
@@ -389,11 +416,26 @@ const PhotoUploadStep = forwardRef<StepHandle, PhotoUploadStepProps>((
       setError(`Maximum ${maxPhotos} photos allowed for ${currentCategory.name}.`);
       return;
     }
+    
+    // Limit batch size to prevent timeouts
+    const MAX_BATCH_SIZE = 5;
+    if (files.length > MAX_BATCH_SIZE) {
+      setError(`Please upload a maximum of ${MAX_BATCH_SIZE} files at a time to prevent timeouts.`);
+      return;
+    }
+    
+    // Check file sizes
+    const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
+    const oversizedFiles = files.filter(file => file.size > MAX_FILE_SIZE);
+    if (oversizedFiles.length > 0) {
+      setError(`Some files are too large. Maximum file size is 10MB.`);
+      return;
+    }
 
-    // If no villa ID, fallback to local preview mode
-    if (!villaId) {
+    // If no villa ID or backend unavailable, fallback to local preview mode
+    if (!villaId || !isBackendAvailable) {
       const newPhotos: PhotoItem[] = files.map(file => ({
-        id: `${Date.now()}-${Math.random()}`,
+        id: `local-${Date.now()}-${Math.random()}`,
         file,
         category: selectedCategory,
         subfolder: selectedSubfolder || undefined,
@@ -403,12 +445,18 @@ const PhotoUploadStep = forwardRef<StepHandle, PhotoUploadStepProps>((
 
       const updatedPhotos = [...photos, ...newPhotos];
       setPhotos(updatedPhotos);
-      setError(null);
+      if (!isBackendAvailable) {
+        setError('Backend unavailable - photos saved locally only');
+        setTimeout(() => setError(null), 5000);
+      } else {
+        setError(null);
+      }
       if (fileInputRef.current) fileInputRef.current.value = '';
       return;
     }
 
     setUploading(true);
+    setUploadProgress(0);
     setError(null);
 
     try {
@@ -430,19 +478,53 @@ const PhotoUploadStep = forwardRef<StepHandle, PhotoUploadStepProps>((
         formData.append('subfolder', selectedSubfolder);
       }
 
-      // Upload to SharePoint via API
+      // Upload to SharePoint via API with error handling and timeout
       const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4001';
-      const response = await fetch(`${API_URL}/api/photos/upload-sharepoint`, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-        },
-        body: formData
-      });
+      let response: Response;
+      
+      // Create an AbortController for timeout
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => {
+        controller.abort();
+      }, 30000); // 30 second timeout
+      
+      try {
+        response = await fetch(`${API_URL}/api/photos/upload-sharepoint`, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${token}`,
+          },
+          body: formData,
+          signal: controller.signal
+        });
+        clearTimeout(timeoutId);
+      } catch (fetchError: any) {
+        clearTimeout(timeoutId);
+        console.error('Network error during photo upload:', fetchError);
+        
+        // Check if it was a timeout
+        if (fetchError.name === 'AbortError') {
+          throw new Error('Upload timeout: The server took too long to respond. Please try again with fewer files.');
+        }
+        
+        throw new Error('Network error: Unable to connect to server. Please check your connection.');
+      }
 
       if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.error || 'Upload failed');
+        let errorMessage = 'Upload failed';
+        try {
+          const errorData = await response.json();
+          errorMessage = errorData.error || errorMessage;
+          
+          // Check for specific SharePoint errors
+          if (errorMessage.includes('Resource not found') || errorMessage.includes('SharePoint')) {
+            console.warn('SharePoint folder issue detected, falling back to local mode');
+            throw new Error('SharePoint folder not available. Files will be saved locally.');
+          }
+        } catch (jsonError) {
+          console.error('Failed to parse error response:', jsonError);
+        }
+        throw new Error(errorMessage);
       }
 
       const result = await response.json();
@@ -453,13 +535,13 @@ const PhotoUploadStep = forwardRef<StepHandle, PhotoUploadStepProps>((
         file: null, // File already uploaded, don't store locally
         category: selectedCategory,
         subfolder: selectedSubfolder || undefined,
-        preview: `${API_URL}/api/photos/serve/${photo.id}`, // Use photo serve endpoint for preview
+        preview: `${API_URL}/api/photos/public/${photo.id}?t=${Date.now()}`, // Use public endpoint with cache buster
         uploaded: true,
         sharePointId: photo.sharePointFileId,
         sharePointPath: photo.sharePointPath,
         fileName: photo.fileName,
         fileUrl: photo.fileUrl,
-        thumbnailUrl: `${API_URL}/api/photos/serve/${photo.id}`, // Use photo serve endpoint for thumbnail
+        thumbnailUrl: `${API_URL}/api/photos/public/${photo.id}`, // Use public endpoint for thumbnail
       }));
 
       const updatedPhotos = [...photos, ...newPhotos];
@@ -472,11 +554,28 @@ const PhotoUploadStep = forwardRef<StepHandle, PhotoUploadStepProps>((
 
     } catch (error) {
       console.error('SharePoint upload error:', error);
-      setError(error instanceof Error ? error.message : 'Upload failed');
+      
+      // Provide user-friendly error messages
+      let errorMessage = 'Upload failed';
+      if (error instanceof Error) {
+        errorMessage = error.message;
+        
+        // Check for specific error types
+        if (error.message.includes('timeout')) {
+          errorMessage = 'Upload timed out. Try uploading fewer files at once.';
+        } else if (error.message.includes('Network error')) {
+          errorMessage = 'Network error. Check your connection and try again.';
+          setIsBackendAvailable(false);
+        } else if (error.message.includes('SharePoint')) {
+          errorMessage = 'SharePoint error. Files saved locally instead.';
+        }
+      }
+      
+      setError(errorMessage);
       
       // Fallback to local preview on error
       const newPhotos: PhotoItem[] = files.map(file => ({
-        id: `${Date.now()}-${Math.random()}`,
+        id: `local-${Date.now()}-${Math.random()}`,
         file,
         category: selectedCategory,
         subfolder: selectedSubfolder || undefined,
@@ -487,14 +586,19 @@ const PhotoUploadStep = forwardRef<StepHandle, PhotoUploadStepProps>((
       const updatedPhotos = [...photos, ...newPhotos];
       setPhotos(updatedPhotos);
       if (fileInputRef.current) fileInputRef.current.value = '';
+      
+      // Auto-clear error after 10 seconds
+      setTimeout(() => setError(null), 10000);
     } finally {
       setUploading(false);
+      setUploadProgress(0);
     }
   };
 
-  const handleRemovePhoto = async (photoId: string) => {
-    const photoToRemove = photos.find(p => p.id === photoId);
-    if (!photoToRemove) return;
+  const handleRemovePhoto = async (photoId: string): Promise<void> => {
+    try {
+      const photoToRemove = photos.find(p => p.id === photoId);
+      if (!photoToRemove) return;
 
     // If this is an uploaded photo (has an id from database), call the delete API
     if (photoToRemove.uploaded && photoToRemove.id) {
@@ -502,16 +606,45 @@ const PhotoUploadStep = forwardRef<StepHandle, PhotoUploadStepProps>((
         const token = await getToken();
         if (!token) {
           console.error('No authentication token available');
+          // Still remove from local state even if no token
+          const updatedPhotos = photos.filter(p => p.id !== photoId);
+          setPhotos(updatedPhotos);
           return;
         }
 
         const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4001';
-        const response = await fetch(`${API_URL}/api/photos/${photoToRemove.id}`, {
-          method: 'DELETE',
-          headers: {
-            'Authorization': `Bearer ${token}`,
-          },
-        });
+        
+        // Add timeout to prevent hanging requests
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout for deletion
+        
+        let response: Response;
+        
+        try {
+          response = await fetch(`${API_URL}/api/photos/${photoToRemove.id}`, {
+            method: 'DELETE',
+            headers: {
+              'Authorization': `Bearer ${token}`,
+            },
+            signal: controller.signal,
+          });
+          clearTimeout(timeoutId);
+        } catch (fetchError: any) {
+          clearTimeout(timeoutId);
+          console.error('Network error during photo deletion:', fetchError);
+          
+          // Check if it was a timeout
+          if (fetchError.name === 'AbortError') {
+            console.log('Photo deletion timed out, removing locally');
+          }
+          
+          // Still remove from local state on network error
+          const updatedPhotos = photos.filter(p => p.id !== photoId);
+          setPhotos(updatedPhotos);
+          setError('Photo removed locally (server unavailable)');
+          setTimeout(() => setError(null), 3000);
+          return;
+        }
 
         if (!response.ok) {
           const errorData = await response.json();
@@ -536,23 +669,35 @@ const PhotoUploadStep = forwardRef<StepHandle, PhotoUploadStepProps>((
     // Remove from local state
     const updatedPhotos = photos.filter(p => p.id !== photoId);
     setPhotos(updatedPhotos);
+    } catch (error) {
+      console.error('Error in handleRemovePhoto:', error);
+      // Still try to remove from local state even if there was an error
+      const updatedPhotos = photos.filter(p => p.id !== photoId);
+      setPhotos(updatedPhotos);
+      throw error; // Re-throw for the button handler to catch
+    }
   };
 
   const handleSaveBedroom = (bedroomData: { name: string; bedType: string }) => {
+    console.log('🛏️ PhotoUploadStep: Saving bedroom:', bedroomData);
     if (editingBedroom) {
       const updatedBedrooms = bedrooms.map(b => b.id === editingBedroom.id ? { ...b, ...bedroomData } : b);
+      console.log('🛏️ PhotoUploadStep: Updated bedrooms after edit:', updatedBedrooms);
       setBedrooms(updatedBedrooms);
     } else {
-      const updatedBedrooms = [...bedrooms, { id: `${Date.now()}`, ...bedroomData }];
+      const newBedroom = { id: `bedroom-${Date.now()}`, ...bedroomData };
+      const updatedBedrooms = [...bedrooms, newBedroom];
+      console.log('🛏️ PhotoUploadStep: Updated bedrooms after add:', updatedBedrooms);
       setBedrooms(updatedBedrooms);
     }
     setIsBedroomModalOpen(false);
     setEditingBedroom(null);
   };
 
-  const handleDeleteBedroom = async (id: string) => {
-    const bedroomToDelete = bedrooms.find(b => b.id === id);
-    if (!bedroomToDelete) return;
+  const handleDeleteBedroom = async (id: string): Promise<void> => {
+    try {
+      const bedroomToDelete = bedrooms.find(b => b.id === id);
+      if (!bedroomToDelete) return;
 
     // Find photos associated with this bedroom that need to be deleted from server
     const photosToDelete = photos.filter(p => 
@@ -566,12 +711,27 @@ const PhotoUploadStep = forwardRef<StepHandle, PhotoUploadStepProps>((
         if (!token) continue;
 
         const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4001';
-        const response = await fetch(`${API_URL}/api/photos/${photo.id}`, {
-          method: 'DELETE',
-          headers: {
-            'Authorization': `Bearer ${token}`,
-          },
-        });
+        
+        // Add timeout for deletion
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 5000); // 5 second timeout
+        
+        let response: Response;
+        
+        try {
+          response = await fetch(`${API_URL}/api/photos/${photo.id}`, {
+            method: 'DELETE',
+            headers: {
+              'Authorization': `Bearer ${token}`,
+            },
+            signal: controller.signal,
+          });
+          clearTimeout(timeoutId);
+        } catch (fetchError: any) {
+          clearTimeout(timeoutId);
+          console.error(`Network error deleting photo ${photo.id}:`, fetchError);
+          continue; // Skip to next photo on network error
+        }
 
         if (!response.ok) {
           console.error(`Failed to delete photo ${photo.id} from server`);
@@ -590,6 +750,11 @@ const PhotoUploadStep = forwardRef<StepHandle, PhotoUploadStepProps>((
     // Remove photos from local state
     const updatedPhotos = photos.filter(p => !(p.category === 'bedrooms' && p.subfolder === bedroomToDelete.name));
     setPhotos(updatedPhotos);
+    } catch (error) {
+      console.error('Error deleting bedroom:', error);
+      setError('Failed to delete bedroom. Please try again.');
+      setTimeout(() => setError(null), 5000);
+    }
   };
 
   const validateForm = () => {
@@ -638,13 +803,26 @@ const PhotoUploadStep = forwardRef<StepHandle, PhotoUploadStepProps>((
                 <div className="w-12 h-12 mb-4 animate-spin rounded-full border-4 border-slate-200 border-t-[#009990]"></div>
                 <p className="font-semibold">Uploading to SharePoint...</p>
                 <p className="text-sm">Please wait while files are being uploaded</p>
+                {uploadProgress > 0 && (
+                  <div className="w-48 mt-2">
+                    <div className="bg-slate-200 rounded-full h-2 overflow-hidden">
+                      <div 
+                        className="bg-[#009990] h-full transition-all duration-300"
+                        style={{ width: `${uploadProgress}%` }}
+                      />
+                    </div>
+                    <p className="text-xs mt-1">{uploadProgress}%</p>
+                  </div>
+                )}
               </>
             ) : (
               <>
                 <Upload className="w-12 h-12 mb-4" />
                 <p className="font-semibold">Click to upload or drag and drop</p>
-                <p className="text-sm">Max {currentCategory.maxPhotos || '50'} files. {currentCategory.id === 'videos' ? 'Videos and images' : 'Images only'}.</p>
-                {villaId && <p className="text-xs text-[#009990] mt-1">✅ SharePoint integration enabled</p>}
+                <p className="text-sm">Max {currentCategory.maxPhotos || '50'} files (5 at a time). {currentCategory.id === 'videos' ? 'Videos and images' : 'Images only'}.</p>
+                <p className="text-xs text-slate-500 mt-1">Max file size: 10MB per file</p>
+                {villaId && isBackendAvailable && <p className="text-xs text-[#009990] mt-1">✅ SharePoint integration enabled</p>}
+                {villaId && !isBackendAvailable && <p className="text-xs text-orange-600 mt-1">⚠️ Backend unavailable - local mode</p>}
                 {!villaId && <p className="text-xs text-amber-600 mt-1">⚠️ Preview mode (no villa ID)</p>}
               </>
             )}
@@ -712,7 +890,20 @@ const PhotoUploadStep = forwardRef<StepHandle, PhotoUploadStepProps>((
                   )}
                   
                   <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
-                    <button onClick={() => handleRemovePhoto(photo.id)} className="text-white p-2 bg-black/50 rounded-full">
+                    <button 
+                      type="button"
+                      onClick={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        handleRemovePhoto(photo.id).catch(err => {
+                          console.error('Failed to remove photo:', err);
+                          setError('Failed to remove photo. Please try again.');
+                          setTimeout(() => setError(null), 5000);
+                        });
+                      }} 
+                      className="text-white p-2 bg-black/50 rounded-full hover:bg-black/70 transition-colors"
+                      aria-label="Remove photo"
+                    >
                       <Trash2 className="w-5 h-5" />
                     </button>
                   </div>
@@ -744,7 +935,20 @@ const PhotoUploadStep = forwardRef<StepHandle, PhotoUploadStepProps>((
                   </div>
                   <div className="flex items-center space-x-2">
                     <button type="button" onClick={() => { setEditingBedroom(bedroom); setIsBedroomModalOpen(true); }} className="p-2 hover:bg-white/30 rounded-full"><Pencil className="w-4 h-4 text-slate-600" /></button>
-                    <button type="button" onClick={() => handleDeleteBedroom(bedroom.id)} className="p-2 hover:bg-white/30 rounded-full"><Trash2 className="w-4 h-4 text-red-500" /></button>
+                    <button 
+                      type="button" 
+                      onClick={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        handleDeleteBedroom(bedroom.id).catch(err => {
+                          console.error('Failed to delete bedroom:', err);
+                        });
+                      }} 
+                      className="p-2 hover:bg-white/30 rounded-full"
+                      aria-label="Delete bedroom"
+                    >
+                      <Trash2 className="w-4 h-4 text-red-500" />
+                    </button>
                   </div>
                 </div>
               ))}

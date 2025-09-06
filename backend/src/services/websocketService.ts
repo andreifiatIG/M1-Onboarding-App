@@ -380,16 +380,9 @@ class WebSocketService {
    * Set up ElectricSQL integration for real-time data changes
    */
   private setupElectricSQLIntegration(): void {
-    // Subscribe to data changes from ElectricSQL
-    const tables = ['Villa', 'Document', 'Photo', 'Staff', 'Owner', 'Agreement', 'FacilityChecklist'];
-    
-    for (const table of tables) {
-      electricSQLService.subscribeToTable(table, (change) => {
-        this.broadcastDataChange(table, change);
-      }).catch(error => {
-        logger.error(`Failed to subscribe to ElectricSQL changes for ${table}:`, error);
-      });
-    }
+    // ElectricSQL subscriptions are now handled per-user authentication
+    // instead of global subscriptions during service initialization
+    logger.info('ElectricSQL integration setup - subscriptions will be handled per authenticated user');
   }
 
   /**

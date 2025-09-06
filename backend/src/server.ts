@@ -189,13 +189,17 @@ async function initializeServices() {
   try {
     logger.info('Initializing ElectricSQL service...');
     await electricSQLService.initialize({
-      url: process.env.ELECTRIC_URL || 'ws://localhost:5133',
+      url: process.env.ELECTRIC_URL || 'http://localhost:5133',
       authToken: process.env.ELECTRIC_AUTH_TOKEN
     });
     results.electricSQL = true;
     logger.info('✅ ElectricSQL service initialized');
   } catch (error) {
     logger.error('❌ Failed to initialize ElectricSQL service:', error);
+    // Continue without ElectricSQL in development
+    if (process.env.NODE_ENV === 'development') {
+      logger.warn('⚠️  Continuing without ElectricSQL in development mode');
+    }
   }
 
   // Initialize WebSocket service

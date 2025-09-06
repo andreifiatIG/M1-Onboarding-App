@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Test Document Upload</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 50px auto;
+            padding: 20px;
+        }
+        .status {
+            margin: 20px 0;
+            padding: 10px;
+            border-radius: 5px;
+        }
+        .success {
+            background-color: #d4edda;
+            color: #155724;
+        }
+        .error {
+            background-color: #f8d7da;
+            color: #721c24;
+        }
+        button {
+            padding: 10px 20px;
+            font-size: 16px;
+            cursor: pointer;
+        }
+        pre {
+            background: #f4f4f4;
+            padding: 10px;
+            border-radius: 5px;
+            overflow-x: auto;
+        }
+    </style>
+</head>
+<body>
+    <h1>Test Document Upload Endpoint</h1>
+    
+    <div>
+        <h2>Step 1: Test Backend Health</h2>
+        <button onclick="testHealth()">Test Health</button>
+        <div id="health-status"></div>
+    </div>
+
+    <div>
+        <h2>Step 2: Test Document Upload (No Auth)</h2>
+        <input type="file" id="test-file" accept=".pdf,.doc,.docx,.txt">
+        <button onclick="testUploadNoAuth()">Test Upload (No Auth)</button>
+        <div id="upload-status"></div>
+    </div>
+
+    <div>
+        <h2>Step 3: Test CORS</h2>
+        <button onclick="testCORS()">Test CORS</button>
+        <div id="cors-status"></div>
+    </div>
+
+    <script>
+        const API_URL = 'http://localhost:4001';
+
+        async function testHealth() {
+            const statusDiv = document.getElementById('health-status');
+            try {
+                const response = await fetch(`${API_URL}/health`);
+                const data = await response.json();
+                statusDiv.className = 'status success';
+                statusDiv.innerHTML = `<strong>✅ Backend is healthy!</strong><pre>${JSON.stringify(data, null, 2)}</pre>`;
+            } catch (error) {
+                statusDiv.className = 'status error';
+                statusDiv.innerHTML = `<strong>❌ Backend health check failed:</strong><pre>${error.message}</pre>`;
+            }
+        }
+
+        async function testUploadNoAuth() {
+            const statusDiv = document.getElementById('upload-status');
+            const fileInput = document.getElementById('test-file');
+            
+            if (!fileInput.files[0]) {
+                statusDiv.className = 'status error';
+                statusDiv.innerHTML = 'Please select a file first';
+                return;
+            }
+
+            const formData = new FormData();
+            formData.append('documents', fileInput.files[0]);
+            formData.append('villaId', 'test-villa-id');
+            formData.append('documentType', 'PROPERTY_CONTRACT');
+            formData.append('category', 'legal');
+
+            try {
+                const response = await fetch(`${API_URL}/api/documents/upload-sharepoint`, {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                const contentType = response.headers.get('content-type');
+                let responseData;
+                
+                if (contentType && contentType.includes('application/json')) {
+                    responseData = await response.json();
+                } else {
+                    responseData = await response.text();
+                }
+                
+                if (response.ok) {
+                    statusDiv.className = 'status success';
+                    statusDiv.innerHTML = `<strong>✅ Upload endpoint accessible!</strong><pre>${JSON.stringify(responseData, null, 2)}</pre>`;
+                } else if (response.status === 401) {
+                    statusDiv.className = 'status success';
+                    statusDiv.innerHTML = `<strong>✅ Endpoint works! (401 - Auth required as expected)</strong><pre>${JSON.stringify(responseData, null, 2)}</pre>`;
+                } else {
+                    statusDiv.className = 'status error';
+                    statusDiv.innerHTML = `<strong>⚠️ Unexpected response:</strong><pre>Status: ${response.status}\n${JSON.stringify(responseData, null, 2)}</pre>`;
+                }
+            } catch (error) {
+                statusDiv.className = 'status error';
+                statusDiv.innerHTML = `<strong>❌ Upload test failed:</strong><pre>${error.message}</pre>`;
+            }
+        }
+
+        async function testCORS() {
+            const statusDiv = document.getElementById('cors-status');
+            try {
+                const response = await fetch(`${API_URL}/api/documents/upload-sharepoint`, {
+                    method: 'OPTIONS',
+                    headers: {
+                        'Origin': window.location.origin,
+                        'Access-Control-Request-Method': 'POST',
+                        'Access-Control-Request-Headers': 'Authorization,Content-Type'
+                    }
+                });
+                
+                const corsHeaders = {
+                    'Access-Control-Allow-Origin': response.headers.get('Access-Control-Allow-Origin'),
+                    'Access-Control-Allow-Methods': response.headers.get('Access-Control-Allow-Methods'),
+                    'Access-Control-Allow-Headers': response.headers.get('Access-Control-Allow-Headers'),
+                    'Access-Control-Allow-Credentials': response.headers.get('Access-Control-Allow-Credentials')
+                };
+                
+                statusDiv.className = 'status success';
+                statusDiv.innerHTML = `<strong>✅ CORS Headers:</strong><pre>${JSON.stringify(corsHeaders, null, 2)}</pre>`;
+            } catch (error) {
+                statusDiv.className = 'status error';
+                statusDiv.innerHTML = `<strong>❌ CORS test failed:</strong><pre>${error.message}</pre>`;
+            }
+        }
+
+        // Auto-test health on load
+        window.onload = () => {
+            testHealth();
+        };
+    </script>
+</body>
+</html>

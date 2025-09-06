@@ -184,22 +184,73 @@ class SharePointService {
     
     const villa = await prisma.villa.findUnique({
       where: { id: villaId },
-      select: { villaCode: true }
+      select: { villaCode: true, villaName: true }
     });
 
     logger.info(`📋 Current villa code in DB: ${villa?.villaCode || 'NONE'}`);
 
     // If villa has a proper code (not the UUID), use it
-    if (villa?.villaCode && villa.villaCode !== villaId && villa.villaCode.startsWith('VIL')) {
+    if (villa?.villaCode && villa.villaCode !== villaId && villa.villaCode.match(/^VIL\d{6}$/)) {
       logger.info(`✅ Using existing villa code: ${villa.villaCode}`);
       return villa.villaCode;
     }
 
-    // Generate a new code
-    const villaCount = await prisma.villa.count();
-    const newCode = `VIL${String(villaCount).padStart(4, '0')}`;
+    // Generate a new unique code
+    let attempts = 0;
+    let newCode: string;
+    const maxAttempts = 10;
     
-    logger.info(`🆕 Generating new villa code: ${newCode} (based on count: ${villaCount})`);
+    do {
+      // Get all existing villa codes to find the next available number
+      const existingCodes = await prisma.villa.findMany({
+        select: { villaCode: true },
+        where: {
+          villaCode: {
+            startsWith: 'VIL',
+            not: { in: [villaId, villa?.villaCode || ''] } // Exclude UUIDs and current invalid codes
+          }
+        }
+      });
+
+      // Extract numbers from existing codes
+      const codeNumbers = existingCodes
+        .map(v => v.villaCode)
+        .filter(code => code.match(/^VIL\d{6}$/))
+        .map(code => parseInt(code.substring(3)))
+        .filter(num => !isNaN(num))
+        .sort((a, b) => a - b);
+
+      // Find next available number
+      let nextNumber = 1;
+      for (const num of codeNumbers) {
+        if (num === nextNumber) {
+          nextNumber++;
+        } else {
+          break;
+        }
+      }
+
+      newCode = `VIL${String(nextNumber).padStart(6, '0')}`;
+      
+      // Check if this code already exists (race condition protection)
+      const existingVilla = await prisma.villa.findUnique({
+        where: { villaCode: newCode }
+      });
+      
+      if (!existingVilla) {
+        break;
+      }
+      
+      attempts++;
+      logger.warn(`Villa code ${newCode} already exists, trying again (attempt ${attempts})`);
+      
+    } while (attempts < maxAttempts);
+    
+    if (attempts >= maxAttempts) {
+      throw new Error('Unable to generate unique villa code after maximum attempts');
+    }
+    
+    logger.info(`🆕 Generated new villa code: ${newCode} (sequence number: ${parseInt(newCode.substring(3))})`);
     
     // Update the villa with the new code
     await prisma.villa.update({
@@ -225,22 +276,34 @@ class SharePointService {
         select: { villaCode: true, sharePointPath: true }
       });
 
-      // If SharePoint path is already stored, check that path
+      // If SharePoint path is already stored and valid, check that path
       if (villa?.sharePointPath) {
         try {
           await microsoftGraphService.getClient()
             .api(`/sites/${this.config.siteId}/drives/${this.config.driveId}/root:${villa.sharePointPath}`)
             .get();
+          
+          logger.info(`Villa folder exists at stored path: ${villa.sharePointPath}`);
           return true;
         } catch (error: any) {
           if (error.statusCode === 404) {
+            logger.warn(`Stored SharePoint path not found: ${villa.sharePointPath}. Will regenerate.`);
+            // Clear invalid path from database
+            await prisma.villa.update({
+              where: { id: villaId },
+              data: { 
+                sharePointPath: null, 
+                documentsPath: null, 
+                photosPath: null 
+              }
+            });
             return false;
           }
           throw error;
         }
       }
 
-      // Get or generate proper villa code
+      // Generate proper villa code if needed
       const villaCode = await this.getOrGenerateVillaCode(villaId);
       
       const sanitizedVillaName = this.sanitizeFolderName(villaName);
@@ -249,17 +312,28 @@ class SharePointService {
       const villaBasePath = basePath ? `${basePath}/Villas/${villaFolderName}` : `/Villas/${villaFolderName}`;
 
       try {
-        // Try to get the folder
+        // Try to get the folder with the expected path
         await microsoftGraphService.getClient()
           .api(`/sites/${this.config.siteId}/drives/${this.config.driveId}/root:${villaBasePath}`)
           .get();
         
-        logger.info(`Villa folder already exists: ${villaBasePath}`);
+        logger.info(`Villa folder found at expected path: ${villaBasePath}`);
+        
+        // Update database with found path
+        const folderStructure = this.getExistingFolderStructure(villaBasePath);
+        await prisma.villa.update({
+          where: { id: villaId },
+          data: {
+            sharePointPath: villaBasePath,
+            documentsPath: folderStructure.legalDocuments,
+            photosPath: folderStructure.photosMedia,
+          },
+        });
+        
         return true;
       } catch (error: any) {
-        // Folder doesn't exist
         if (error.statusCode === 404) {
-          logger.info(`Villa folder does not exist: ${villaBasePath}`);
+          logger.info(`Villa folder does not exist at expected path: ${villaBasePath}`);
           return false;
         }
         throw error;
@@ -1076,11 +1150,17 @@ class SharePointService {
         await this.initialize();
       }
 
-      const files = await microsoftGraphService.listFiles(
-        this.driveInfo!.id,
+      if (!this.config?.siteId || !this.config?.driveId) {
+        throw new Error('SharePoint configuration not available');
+      }
+
+      const result = await microsoftGraphService.listFiles(
+        this.config.siteId,
+        this.config.driveId,
         folderPath
       );
 
+      const files = result.value || [];
       return files.map((file: any) => ({
         id: file.id,
         name: file.name,
@@ -1091,9 +1171,13 @@ class SharePointService {
         downloadUrl: file['@microsoft.graph.downloadUrl']
       }));
 
-    } catch (error) {
+    } catch (error: any) {
+      if (error.message?.includes('Resource not found') || error.statusCode === 404) {
+        logger.warn(`SharePoint folder not found: ${folderPath}`);
+        return [];
+      }
       logger.error('Failed to list SharePoint files:', error);
-      return [];
+      throw error;
     }
   }
 
@@ -1158,6 +1242,51 @@ class SharePointService {
     } catch (error) {
       logger.error('❌ SharePoint connection test failed:', error);
       return false;
+    }
+  }
+
+  /**
+   * Ensure villa folders exist (helper method for fixing SharePoint paths)
+   */
+  async ensureVillaFolders(villaId: string, villaName: string): Promise<void> {
+    try {
+      // Check if folders already exist
+      const folderExists = await this.checkVillaFolderExists(villaId, villaName);
+      
+      if (!folderExists) {
+        // Create the folder structure
+        await this.createVillaFolders(villaId, villaName);
+        logger.info(`✅ Villa folders ensured for ${villaName}`);
+      } else {
+        // Folders exist, but make sure the database is updated
+        const villa = await prisma.villa.findUnique({
+          where: { id: villaId },
+          select: { sharePointPath: true, documentsPath: true, photosPath: true }
+        });
+        
+        if (!villa?.sharePointPath) {
+          // Update database with existing folder paths
+          const villaCode = await this.getOrGenerateVillaCode(villaId);
+          const sanitizedVillaName = this.sanitizeFolderName(villaName);
+          const basePath = this.config?.baseFolderPath || '';
+          const villaBasePath = basePath ? `${basePath}/Villas/${sanitizedVillaName}_${villaCode}` : `/Villas/${sanitizedVillaName}_${villaCode}`;
+          const folderStructure = this.getExistingFolderStructure(villaBasePath);
+          
+          await prisma.villa.update({
+            where: { id: villaId },
+            data: {
+              sharePointPath: villaBasePath,
+              documentsPath: folderStructure.legalDocuments,
+              photosPath: folderStructure.photosMedia,
+            },
+          });
+          
+          logger.info(`✅ Database updated with existing SharePoint paths for ${villaName}`);
+        }
+      }
+    } catch (error) {
+      logger.error(`❌ Failed to ensure villa folders for ${villaName}:`, error);
+      throw error;
     }
   }
 

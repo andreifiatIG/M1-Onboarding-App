@@ -23,29 +23,47 @@ interface ElectricShape {
 
 // HTTP client for fetching shape data
 class ShapeClient {
-  constructor(private baseUrl: string = 'http://localhost:3000') {}
+  constructor(private baseUrl: string = 'http://localhost:5133') {}
 
   async getShape(config: ShapeConfig): Promise<ElectricShape> {
     try {
       const params = new URLSearchParams();
-      if (config.params?.table) params.set('table', config.params.table);
+      if (config.params?.table) {
+        // Ensure table names are properly quoted for PostgreSQL
+        const tableName = config.params.table.startsWith('"') ? config.params.table : `"${config.params.table}"`;
+        params.set('table', tableName);
+      }
       if (config.params?.where) params.set('where', config.params.where);
       if (config.params?.columns) params.set('columns', config.params.columns.join(','));
+      
+      // ElectricSQL requires offset parameter (use -1 for live stream)
+      params.set('offset', '-1');
 
       const url = `${this.baseUrl}/v1/shape?${params.toString()}`;
-      const response = await fetch(url);
       
-      if (!response.ok) {
-        throw new Error(`Failed to fetch shape: ${response.statusText}`);
-      }
+      // Add timeout to prevent hanging requests
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 10000); // 10 second timeout
+      
+      try {
+        const response = await fetch(url, { signal: controller.signal });
+        clearTimeout(timeout);
+        
+        if (!response.ok) {
+          throw new Error(`Failed to fetch shape: ${response.status} ${response.statusText}`);
+        }
 
-      const data = await response.json();
-      
-      return {
-        value: Array.isArray(data) ? data : [],
-        isLoading: false,
-        error: undefined
-      };
+        const data = await response.json();
+        
+        return {
+          value: Array.isArray(data) ? data : [],
+          isLoading: false,
+          error: undefined
+        };
+      } catch (fetchError) {
+        clearTimeout(timeout);
+        throw fetchError;
+      }
     } catch (error) {
       logger.error('Failed to fetch shape data:', error);
       return {
@@ -146,19 +164,30 @@ class ElectricSQLService {
     }
 
     try {
-      // Test by fetching a simple shape
-      const testShape = await this.client.getShape({
-        url: '/v1/shape',
-        params: {
-          table: 'Villa',
-          where: 'id = \'test\''
-        }
-      });
+      // Test by checking health endpoint first
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 5000);
       
-      logger.debug('✅ ElectricSQL connection test successful', {
-        hasData: testShape.value.length > 0,
-        error: testShape.error?.message
-      });
+      try {
+        const response = await fetch(`${this.client['baseUrl']}/v1/health`, {
+          signal: controller.signal
+        });
+        clearTimeout(timeout);
+        
+        if (!response.ok) {
+          throw new Error(`Health check failed: ${response.status}`);
+        }
+        
+        const health = await response.json();
+        if (health.status !== 'active') {
+          throw new Error(`ElectricSQL not active: ${health.status}`);
+        }
+      } catch (fetchError) {
+        clearTimeout(timeout);
+        throw fetchError;
+      }
+      
+      logger.debug('✅ ElectricSQL connection test successful');
     } catch (error) {
       logger.error('❌ ElectricSQL connection test failed:', error);
       throw error;
@@ -187,23 +216,23 @@ class ElectricSQLService {
       case 'Staff':
       case 'Photo':
       case 'Document':
-      case 'Agreement':
       case 'FacilityChecklist':
       case 'OnboardingProgress':
       case 'OnboardingSession':
       case 'OnboardingStepProgress':
       case 'SkippedItem':
       case 'OnboardingBackup':
+      case 'StepFieldProgress':
         if (role === 'manager') return '';
-        if (villaId) return `"villaId" = '${villaId}'`;
-        return '"villaId" IS NULL';
+        if (villaId) return `\"villaId\" = '${villaId}'`;
+        return '\"villaId\" IS NULL';
         
       case 'BankDetails':
       case 'OTACredentials':
       case 'ContractualDetails':
         if (role === 'admin') return '';
-        if (role === 'owner' && villaId) return `"villaId" = '${villaId}'`;
-        return '"villaId" IS NULL';
+        if (role === 'owner' && villaId) return `\"villaId\" = '${villaId}'`;
+        return '\"villaId\" IS NULL';
       case 'AdminAction':
         return role === 'admin' ? '' : 'id IS NULL';
       default:
@@ -271,22 +300,23 @@ class ElectricSQLService {
       case 'admin':
         return [
           'Villa', 'Owner', 'ContractualDetails', 'BankDetails', 'OTACredentials',
-          'Staff', 'Photo', 'Document', 'Agreement', 'FacilityChecklist',
+          'Staff', 'Photo', 'Document', 'FacilityChecklist',
           'OnboardingProgress', 'OnboardingSession', 'OnboardingStepProgress',
-          'SkippedItem', 'OnboardingBackup', 'AdminAction'
+          'SkippedItem', 'OnboardingBackup', 'StepFieldProgress'
         ];
         
       case 'manager':
         return [
           'Villa', 'Owner', 'ContractualDetails', 'Staff', 'Photo', 'Document',
-          'Agreement', 'FacilityChecklist', 'OnboardingProgress', 'OnboardingSession',
-          'OnboardingStepProgress', 'SkippedItem', 'OnboardingBackup'
+          'FacilityChecklist', 'OnboardingProgress', 'OnboardingSession',
+          'OnboardingStepProgress', 'SkippedItem', 'OnboardingBackup', 'StepFieldProgress'
         ];
         
       case 'owner':
         return [
           'Villa', 'Owner', 'ContractualDetails', 'BankDetails', 'Staff',
-          'Photo', 'Document', 'OnboardingSession'
+          'Photo', 'Document', 'OnboardingSession', 'OnboardingProgress',
+          'OnboardingStepProgress', 'StepFieldProgress'
         ];
         
       default:

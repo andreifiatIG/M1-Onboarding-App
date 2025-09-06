@@ -1,0 +1,1 @@
+[?1049h[22;0;0t[1;62r(B[m[4l[?7h[39;49m]4;8;rgb:54/54/54\]4;9;rgb:FF/54/54\]4;10;rgb:54/FF/54\]4;11;rgb:FF/FF/54\]4;12;rgb:54/54/FF\]4;13;rgb:FF/54/FF\]4;14;rgb:54/FF/FF\[39;49m(B[m[H[2JEvery 2.0s: src/server.ts[1;168HInspiringDev: Sat Sep  6 18:37:42 2025[3;1Hsh: 1: src/server.ts: not found[62;205H(B[m[39;49m]104[62;1H[?1049l[23;0;0t[?1l>

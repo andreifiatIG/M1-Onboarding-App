@@ -42,22 +42,12 @@ async function getClerkToken(): Promise<string | null> {
     
     // Check if user is signed in
     if (!clerk.user) {
-      console.warn('⚠️  No Clerk user signed in');
       return null;
     }
-    
-    console.log('👤 User signed in:', clerk.user.id);
-    console.log('🔗 Session available:', !!clerk.session);
 
     // Get the session token
     const token = await clerk.session?.getToken();
-    if (token) {
-      console.log('✅ Token obtained successfully');
-      return token;
-    }
-
-    console.error('❌ No Clerk token available despite user being signed in');
-    return null;
+    return token || null;
   } catch (error) {
     console.error('Error getting Clerk token:', error);
     return null;
@@ -72,22 +62,15 @@ export class ClientApiClient {
   constructor(token?: string) {
     this.baseURL = API_URL;
     this.token = token || null;
-    console.log('🏗️  ClientApiClient created');
-    console.log('🔗 Base URL:', this.baseURL);
-    console.log('🌍 NEXT_PUBLIC_API_URL:', process.env.NEXT_PUBLIC_API_URL);
-    if (token) {
-      console.log('🔑 Token provided in constructor:', token.substring(0, 20) + '...');
+    // Only log in development mode
+    if (process.env.NODE_ENV === 'development') {
+      console.log('🏗️  ClientApiClient created with base URL:', this.baseURL);
     }
   }
 
   // Set token manually (useful for components with useAuth hook)
   setToken(token: string | null) {
     this.token = token;
-    if (token) {
-      console.log('🔑 Token set via setToken():', token.substring(0, 20) + '...');
-    } else {
-      console.log('⚠️ Token cleared');
-    }
   }
 
   async request<T = any>(
@@ -106,33 +89,20 @@ export class ClientApiClient {
     // Use manually set token first, then try to get from Clerk
     let authToken = this.token;
     if (!authToken) {
-      console.log('🔄 No manual token, trying Clerk...');
       authToken = await getClerkToken();
-    } else {
-      console.log('🔑 Using manually set token');
     }
 
     if (authToken) {
       headers['Authorization'] = `Bearer ${authToken}`;
-      console.log('✅ API Request with auth token to:', endpoint);
-      console.log('🔑 Token preview:', authToken.substring(0, 20) + '...');
-    } else {
-      console.error('❌ API Request without auth token to:', endpoint);
-      console.error('🚨 This will likely result in 401 Unauthorized');
     }
 
     try {
       const fullUrl = `${this.baseURL}${endpoint}`;
-      console.log('🌐 Making request to:', fullUrl);
-      console.log('📋 Request headers:', headers);
       
       const response = await fetch(fullUrl, {
         ...options,
         headers,
       });
-      
-      console.log('📡 Response status:', response.status);
-      console.log('📡 Response ok:', response.ok);
 
       // Check if response is JSON by looking at content-type
       const contentType = response.headers.get('content-type');
@@ -211,20 +181,24 @@ export class ClientApiClient {
         data: data.data || data,
       };
     } catch (error) {
-      console.error('💥 API request failed:', error);
-      
-      // Provide more specific error information
+      // Handle network errors more gracefully
       if (error instanceof TypeError && error.message.includes('Failed to fetch')) {
-        console.error('🚨 Network error - possible causes:');
-        console.error('   - Backend not running on', this.baseURL);
-        console.error('   - CORS issue');
-        console.error('   - Network connectivity problem');
+        // Only log once per 30 seconds to reduce console spam
+        const now = Date.now();
+        if (!window.__lastBackendErrorTime || now - window.__lastBackendErrorTime > 30000) {
+          console.warn(`⚠️ Backend unavailable at ${this.baseURL}. Running in offline mode.`);
+          window.__lastBackendErrorTime = now;
+        }
         
         return {
           success: false,
-          error: `Network error: Cannot connect to backend at ${this.baseURL}. Please ensure the backend server is running.`,
+          error: 'Backend unavailable',
+          offline: true,
         };
       }
+      
+      // Log other errors normally
+      console.error('API request failed:', error);
       
       return {
         success: false,

@@ -589,16 +589,8 @@ const OnboardingWizardContent: React.FC = () => {
         setIsOfflineMode(true);
       }
     } catch (error: any) {
-      // Handle all network and server errors gracefully
-      const errorMessage = error?.message || 'Unknown error';
-      
-      if (errorMessage.includes('Failed to fetch') || errorMessage.includes('NetworkError')) {
-        console.warn('🌐 Network connectivity issue - auto-save failed, data saved locally');
-      } else if (errorMessage.includes('500') || errorMessage.includes('server')) {
-        console.warn('🔧 Server error during auto-save - data saved locally');  
-      } else {
-        console.warn('⚠️ Auto-save failed - data saved locally:', errorMessage);
-      }
+      // Handle all network and server errors gracefully - silently save locally
+      // No need to spam console with errors
       
       // Save data locally regardless of error type
       setLastSavedData(prev => ({

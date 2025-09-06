@@ -175,9 +175,6 @@ class VillaService {
             where: { isActive: true },
             orderBy: { createdAt: 'desc' },
           },
-          agreements: {
-            orderBy: { createdAt: 'desc' },
-          },
           facilities: {
             orderBy: [{ category: 'asc' }, { subcategory: 'asc' }],
           },
@@ -370,7 +367,6 @@ class VillaService {
         await tx.bankDetails.deleteMany({ where: { villaId: id } });
         await tx.contractualDetails.deleteMany({ where: { villaId: id } });
         // Don't delete owner as they might have other villas
-        await tx.agreement.deleteMany({ where: { villaId: id } });
         await tx.onboardingProgress.deleteMany({ where: { villaId: id } });
         await tx.onboardingSession.deleteMany({ where: { villaId: id } });
         
@@ -407,9 +403,6 @@ class VillaService {
           },
           documents: {
             where: { isActive: true },
-            orderBy: { createdAt: 'desc' },
-          },
-          agreements: {
             orderBy: { createdAt: 'desc' },
           },
           facilities: {
@@ -576,7 +569,6 @@ class VillaService {
         staff: villa.staff || [],
         facilities: villa.facilities || [],
         photos: villa.photos || [],
-        agreements: villa.agreements || [],
         onboarding: villa.onboarding || null,
         recentBookings: [], // Temporarily empty as booking model is not available
       };

@@ -399,20 +399,44 @@ class MicrosoftGraphService {
         throw new Error('Client not initialized');
       }
 
-      const content = await this.client
+      // Try to get the content directly as a response
+      const response = await this.client
+        .api(`/sites/${siteId}/drives/${driveId}/items/${fileId}/content`)
+        .responseType('arraybuffer')
+        .get();
+
+      // If response is already an ArrayBuffer, return it
+      if (response instanceof ArrayBuffer) {
+        return response;
+      }
+      
+      // If response is a Buffer, convert to ArrayBuffer
+      if (Buffer.isBuffer(response)) {
+        return response.buffer.slice(response.byteOffset, response.byteOffset + response.byteLength);
+      }
+      
+      // If response is something else (shouldn't happen), try to handle it
+      logger.warn('Unexpected response type from SharePoint download:', typeof response);
+      
+      // Try alternative stream approach if available
+      const streamResponse = await this.client
         .api(`/sites/${siteId}/drives/${driveId}/items/${fileId}/content`)
         .getStream();
-
-      // Convert stream to ArrayBuffer
-      const chunks: Buffer[] = [];
-      return new Promise((resolve, reject) => {
-        content.on('data', (chunk: Buffer) => chunks.push(chunk));
-        content.on('end', () => {
-          const buffer = Buffer.concat(chunks);
-          resolve(buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength));
+        
+      // Check if it's a readable stream
+      if (streamResponse && typeof streamResponse.pipe === 'function') {
+        const chunks: Buffer[] = [];
+        return new Promise((resolve, reject) => {
+          streamResponse.on('data', (chunk: Buffer) => chunks.push(chunk));
+          streamResponse.on('end', () => {
+            const buffer = Buffer.concat(chunks);
+            resolve(buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength));
+          });
+          streamResponse.on('error', reject);
         });
-        content.on('error', reject);
-      });
+      }
+      
+      throw new Error('Unable to download file content from SharePoint');
     } catch (error) {
       logger.error(`Failed to download file ${fileId}:`, error);
       throw error;

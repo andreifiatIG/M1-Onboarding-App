@@ -133,8 +133,8 @@ const ReviewSubmitStep = React.memo(forwardRef<StepHandle, ReviewSubmitStepProps
     
     const isVillaInfoComplete = !!villaInfo.villaName && !!villaInfo.villaAddress && !!villaInfo.bedrooms && !!villaInfo.bathrooms;
     const isOwnerDetailsComplete = !!ownerDetails.firstName && !!ownerDetails.lastName && !!ownerDetails.email && !!ownerDetails.phone;
-    const isContractualComplete = !!contractual.contractSignatureDate || !!contractual.serviceCharge;
-    const isBankDetailsComplete = !!bankDetails.bankName && (!!bankDetails.bankAccountNumber || !!bankDetails.accountNumber);
+    const isContractualComplete = !!contractual.contractStartDate || !!contractual.commissionRate !== undefined;
+    const isBankDetailsComplete = !!bankDetails.bankName && (!!bankDetails.accountNumber || !!bankDetails.accountHolderName);
     const isOtaComplete = Object.values(otaCredentials).some(val => val === true) || Object.keys(otaCredentials).length > 0;
     const isDocumentsComplete = documents.length > 0;
     const isStaffComplete = staff.length > 0;
@@ -210,14 +210,13 @@ const ReviewSubmitStep = React.memo(forwardRef<StepHandle, ReviewSubmitStepProps
             {isVillaInfoComplete ? (
               <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-3 text-sm">
                 <DetailItem label="Villa Name" value={villaInfo.villaName} />
-                <DetailItem label="Villa Code" value={villaInfo.villaCode} />
+                <DetailItem label="Location" value={villaInfo.locationType} />
                 <DetailItem label="Address" value={villaInfo.villaAddress} />
                 <DetailItem label="City" value={villaInfo.villaCity} />
                 <DetailItem label="Country" value={villaInfo.villaCountry} />
-                <DetailItem label="Postal Code" value={villaInfo.villaPostalCode} />
+                <DetailItem label="Zip Code" value={villaInfo.villaPostalCode} />
                 <DetailItem label="Property Type" value={villaInfo.propertyType} />
                 <DetailItem label="Villa Style" value={villaInfo.villaStyle} />
-                <DetailItem label="Location Type" value={villaInfo.locationType} />
                 <DetailItem label="Bedrooms" value={villaInfo.bedrooms} />
                 <DetailItem label="Bathrooms" value={villaInfo.bathrooms} />
                 <DetailItem label="Max Guests" value={villaInfo.maxGuests} />
@@ -270,12 +269,12 @@ const ReviewSubmitStep = React.memo(forwardRef<StepHandle, ReviewSubmitStepProps
           <StageWrapper title="3. Contractual Details" isComplete={isContractualComplete}>
              {isContractualComplete ? (
               <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-3 text-sm">
-                <DetailItem label="Contract Signature Date" value={contractual.contractSignatureDate ? new Date(contractual.contractSignatureDate).toLocaleDateString() : 'Not specified'} />
-                <DetailItem label="Contract Renewal Date" value={contractual.contractRenewalDate ? new Date(contractual.contractRenewalDate).toLocaleDateString() : 'Not specified'} />
+                <DetailItem label="Contract Start Date" value={contractual.contractStartDate ? new Date(contractual.contractStartDate).toLocaleDateString() : 'Not specified'} />
+                <DetailItem label="Contract End Date" value={contractual.contractEndDate ? new Date(contractual.contractEndDate).toLocaleDateString() : 'Not specified'} />
                 <DetailItem label="Contract Type" value={contractual.contractType} />
-                <DetailItem label="Service Charge (%)" value={contractual.serviceCharge ? `${contractual.serviceCharge}%` : 'Not specified'} />
-                <DetailItem label="Management Fee (%)" value={contractual.managementFee ? `${contractual.managementFee}%` : 'Not specified'} />
-                <DetailItem label="Marketing Fee (%)" value={contractual.marketingFee ? `${contractual.marketingFee}%` : 'Not specified'} />
+                <DetailItem label="Commission Rate (%)" value={contractual.commissionRate !== undefined ? `${contractual.commissionRate}%` : 'Not specified'} />
+                <DetailItem label="Management Fee (%)" value={contractual.managementFee !== undefined ? `${contractual.managementFee}%` : 'Not specified'} />
+                <DetailItem label="Marketing Fee (%)" value={contractual.marketingFee !== undefined ? `${contractual.marketingFee}%` : 'Not specified'} />
                 <DetailItem label="Payment Schedule" value={contractual.paymentSchedule} />
                 <DetailItem label="Payout Day 1" value={contractual.payoutDay1} />
                 <DetailItem label="Payout Day 2" value={contractual.payoutDay2} />
@@ -319,26 +318,41 @@ const ReviewSubmitStep = React.memo(forwardRef<StepHandle, ReviewSubmitStepProps
 
           <StageWrapper title="5. OTA Credentials" isComplete={isOtaComplete}>
             {isOtaComplete ? (
-              <div className="grid grid-cols-2 gap-x-4 gap-y-2 text-sm">
-                {[
-                  { key: 'bookingComListed', label: 'Booking.com' },
-                  { key: 'airbnbListed', label: 'Airbnb' },
-                  { key: 'vrboListed', label: 'VRBO' },
-                  { key: 'expediaListed', label: 'Expedia' },
-                  { key: 'agodaListed', label: 'Agoda' },
-                  { key: 'hotelsComListed', label: 'Hotels.com' },
-                  { key: 'tripadvisorListed', label: 'TripAdvisor' }
-                ].map(({ key, label }) => {
-                  const isListed = otaCredentials[key] === true;
-                  return (
-                    <div key={key} className="flex items-center justify-between">
-                      <span className="text-slate-700">{label}:</span>
-                      <span className={`font-semibold ${isListed ? 'text-emerald-600' : 'text-slate-400'}`}>
-                        {isListed ? '✓ Listed' : 'Not Listed'}
-                      </span>
-                    </div>
-                  );
-                })}
+              <div className="space-y-3">
+                <div className="grid grid-cols-2 gap-x-4 gap-y-2 text-sm">
+                  {[
+                    { key: 'bookingCom', label: 'Booking.com' },
+                    { key: 'airbnb', label: 'Airbnb' },
+                    { key: 'vrbo', label: 'VRBO' },
+                    { key: 'expedia', label: 'Expedia' },
+                    { key: 'agoda', label: 'Agoda' },
+                    { key: 'hotelsCom', label: 'Hotels.com' },
+                    { key: 'tripadvisor', label: 'TripAdvisor' }
+                  ].map(({ key, label }) => {
+                    const isListed = otaCredentials[`${key}Listed`] === true;
+                    const username = otaCredentials[`${key}Username`];
+                    const propertyId = otaCredentials[`${key}PropertyId`];
+                    const listingUrl = otaCredentials[`${key}ListingUrl`];
+                    
+                    return (
+                      <div key={key} className="space-y-1">
+                        <div className="flex items-center justify-between">
+                          <span className="text-slate-700 font-medium">{label}:</span>
+                          <span className={`font-semibold ${isListed ? 'text-emerald-600' : 'text-slate-400'}`}>
+                            {isListed ? '✓ Listed' : 'Not Listed'}
+                          </span>
+                        </div>
+                        {isListed && (
+                          <div className="pl-4 text-xs text-slate-600">
+                            {username && <div>Username: {username}</div>}
+                            {propertyId && <div>Property ID: {propertyId}</div>}
+                            {listingUrl && <div className="truncate">URL: {listingUrl}</div>}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
             ) : <NotCompletedMessage message="No OTA credentials provided." />}
           </StageWrapper>
@@ -413,12 +427,21 @@ const ReviewSubmitStep = React.memo(forwardRef<StepHandle, ReviewSubmitStepProps
                 <div className="mt-3">
                   <h5 className="font-semibold text-slate-700 mb-2">Facilities by Category:</h5>
                   <div className="grid grid-cols-2 gap-2 text-sm">
-                    {facilities.map((category: FacilityCategory) => (
-                      <div key={category.name} className="flex justify-between">
-                        <span className="text-slate-600">{category.name}:</span>
-                        <span className="font-medium">{category.completed || 0}/{category.total || 0}</span>
-                      </div>
-                    ))}
+                    {facilities.map((category: FacilityCategory) => {
+                      // Convert category names to readable format
+                      const categoryName = category.name
+                        .replace(/_/g, ' ')
+                        .toLowerCase()
+                        .replace(/\b\w/g, l => l.toUpperCase());
+                      return (
+                        <div key={category.name} className="flex justify-between">
+                          <span className="text-slate-600">{categoryName}:</span>
+                          <span className={`font-medium ${category.completed > 0 ? 'text-green-600' : 'text-red-600'}`}>
+                            {category.completed || 0}/{category.total || 0}
+                          </span>
+                        </div>
+                      );
+                    })}
                   </div>
                 </div>
               </div>
@@ -437,10 +460,14 @@ const ReviewSubmitStep = React.memo(forwardRef<StepHandle, ReviewSubmitStepProps
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-sm">
                       {data.step9.bedrooms.map((bedroom: any, index: number) => (
                         <div key={bedroom.id || index} className="flex justify-between">
-                          <span className="text-slate-600">{bedroom.name}:</span>
-                          <span className="font-medium">{bedroom.bedType} ({bedroom.bedCount} bed{bedroom.bedCount !== 1 ? 's' : ''})</span>
+                          <span className="text-slate-600">{bedroom.name || `Bedroom ${index + 1}`}:</span>
+                          <span className="font-medium">{bedroom.bedType || 'Not specified'}</span>
                         </div>
                       ))}
+                    </div>
+                    <div className="mt-2">
+                      <span className="text-slate-600 text-sm">Total Bedrooms: </span>
+                      <span className="font-medium text-sm">{data.step9.bedrooms.length}</span>
                     </div>
                   </div>
                 )}
@@ -476,6 +503,46 @@ const ReviewSubmitStep = React.memo(forwardRef<StepHandle, ReviewSubmitStepProps
           </StageWrapper>
 
           {/* --- TIMELINE END --- */}
+        </div>
+
+        {/* Completion Summary */}
+        <div className="glass-card-white-teal p-6 mx-6">
+          <h3 className="text-lg font-semibold text-slate-800 mb-4">Completion Summary</h3>
+          <div className="grid grid-cols-3 gap-4 mb-4">
+            <div className="text-center">
+              <div className="text-2xl font-bold text-teal-600">
+                {[isVillaInfoComplete, isOwnerDetailsComplete, isContractualComplete, isBankDetailsComplete, isOtaComplete, isDocumentsComplete, isStaffComplete, isFacilitiesComplete, isPhotosComplete].filter(Boolean).length}
+              </div>
+              <div className="text-sm text-slate-600">Steps Completed</div>
+            </div>
+            <div className="text-center">
+              <div className="text-2xl font-bold text-slate-600">9</div>
+              <div className="text-sm text-slate-600">Total Steps</div>
+            </div>
+            <div className="text-center">
+              <div className="text-2xl font-bold text-teal-600">
+                {Math.round(([isVillaInfoComplete, isOwnerDetailsComplete, isContractualComplete, isBankDetailsComplete, isOtaComplete, isDocumentsComplete, isStaffComplete, isFacilitiesComplete, isPhotosComplete].filter(Boolean).length / 9) * 100)}%
+              </div>
+              <div className="text-sm text-slate-600">Complete</div>
+            </div>
+          </div>
+          
+          {!completionStatus.isAllStepsComplete && (
+            <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 mb-4">
+              <h4 className="font-semibold text-amber-800 mb-2">Incomplete Steps:</h4>
+              <ul className="text-sm text-amber-700 space-y-1">
+                {!isVillaInfoComplete && <li>• Villa Information needs completion</li>}
+                {!isOwnerDetailsComplete && <li>• Owner Details need completion</li>}
+                {!isContractualComplete && <li>• Contractual Details need completion</li>}
+                {!isBankDetailsComplete && <li>• Bank Details need completion</li>}
+                {!isOtaComplete && <li>• OTA Credentials need configuration</li>}
+                {!isDocumentsComplete && <li>• Documents need to be uploaded</li>}
+                {!isStaffComplete && <li>• Staff Configuration needs completion</li>}
+                {!isFacilitiesComplete && <li>• Facilities Checklist needs completion</li>}
+                {!isPhotosComplete && <li>• Photos need to be uploaded</li>}
+              </ul>
+            </div>
+          )}
         </div>
 
         <div className="glass-card-white-teal p-6 mx-6">

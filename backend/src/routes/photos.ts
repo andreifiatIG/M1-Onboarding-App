@@ -161,8 +161,20 @@ router.get('/file/:filename', async (req: Request, res: Response) => {
   }
 });
 
-// GET /api/photos/serve/:photoId - Serve photo by database ID (supports SharePoint and local)
-router.get('/serve/:photoId', onboardingReadRateLimit, async (req: Request, res: Response) => {
+// GET /api/photos/public/:photoId - Public endpoint for serving photos (no auth required)
+router.get('/public/:photoId', async (req: Request, res: Response) => {
+  // Set request timeout to prevent hanging
+  req.setTimeout(15000, () => {
+    if (!res.headersSent) {
+      const transparentPixel = Buffer.from('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7', 'base64');
+      res.set({
+        'Content-Type': 'image/gif',
+        'Cache-Control': 'no-cache',
+        'Access-Control-Allow-Origin': '*',
+      });
+      res.send(transparentPixel);
+    }
+  });
   try {
     const { photoId } = req.params;
 
@@ -178,25 +190,154 @@ router.get('/serve/:photoId', onboardingReadRateLimit, async (req: Request, res:
     });
 
     if (!photo) {
-      return res.status(404).json({ error: 'Photo not found' });
+      // Return a 1x1 transparent pixel instead of error
+      const transparentPixel = Buffer.from('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7', 'base64');
+      res.set({
+        'Content-Type': 'image/gif',
+        'Cache-Control': 'no-cache',
+        'Access-Control-Allow-Origin': '*',
+      });
+      return res.send(transparentPixel);
     }
 
-    // Try SharePoint first if SharePoint file ID exists
+    // Try local file first for faster serving
+    const filePath = path.join(process.cwd(), 'uploads', 'photos', photo.fileName);
+    
+    if (fs.existsSync(filePath)) {
+      // Set proper headers for image serving
+      res.set({
+        'Content-Type': photo.mimeType || 'image/jpeg',
+        'Cache-Control': 'public, max-age=86400', // Cache for 24 hours
+        'Access-Control-Allow-Origin': '*',
+        'X-Content-Type-Options': 'nosniff',
+      });
+      return res.sendFile(filePath);
+    }
+
+    // Try SharePoint as fallback (with timeout)
     if (photo.sharePointFileId) {
       try {
-        const downloadResult = await sharePointService.downloadDocument(photo.sharePointFileId);
+        // Create a timeout promise
+        const timeoutPromise = new Promise((_, reject) => {
+          setTimeout(() => reject(new Error('SharePoint download timeout')), 3000); // 3 second timeout
+        });
+        
+        // Race between download and timeout
+        const downloadResult = await Promise.race([
+          sharePointService.downloadDocument(photo.sharePointFileId),
+          timeoutPromise
+        ]) as any;
+        
+        res.set({
+          'Content-Type': downloadResult.mimeType || photo.mimeType || 'image/jpeg',
+          'Cache-Control': 'public, max-age=86400',
+          'Access-Control-Allow-Origin': '*',
+          'X-Content-Type-Options': 'nosniff',
+        });
+        
+        if (Buffer.isBuffer(downloadResult.content)) {
+          return res.send(downloadResult.content);
+        } else if (downloadResult.content instanceof ArrayBuffer) {
+          return res.send(Buffer.from(downloadResult.content));
+        } else {
+          return res.send(Buffer.from(downloadResult.content));
+        }
+      } catch (error) {
+        logger.warn(`Failed to serve from SharePoint: ${error}`);
+      }
+    }
+
+    // Return transparent pixel if all fails
+    const transparentPixel = Buffer.from('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7', 'base64');
+    res.set({
+      'Content-Type': 'image/gif',
+      'Cache-Control': 'no-cache',
+      'Access-Control-Allow-Origin': '*',
+    });
+    return res.send(transparentPixel);
+  } catch (error) {
+    logger.error('Error serving public photo:', error);
+    // Return transparent pixel on error
+    const transparentPixel = Buffer.from('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7', 'base64');
+    res.set({
+      'Content-Type': 'image/gif',
+      'Cache-Control': 'no-cache',
+      'Access-Control-Allow-Origin': '*',
+    });
+    res.send(transparentPixel);
+  }
+});
+
+// GET /api/photos/serve/:photoId - Serve photo by database ID (supports SharePoint and local)
+router.get('/serve/:photoId', async (req: Request, res: Response) => {
+  // Set request timeout to prevent hanging
+  req.setTimeout(15000, () => {
+    if (!res.headersSent) {
+      res.status(408).json({ error: 'Request timeout' });
+    }
+  });
+  try {
+    const { photoId } = req.params;
+
+    // Find the photo in database
+    const photo = await prisma.photo.findUnique({
+      where: { id: photoId },
+      select: {
+        fileName: true,
+        sharePointFileId: true,
+        mimeType: true,
+        fileUrl: true,
+      },
+    });
+
+    if (!photo) {
+      // Return a placeholder image instead of JSON error
+      const placeholderSvg = `
+        <svg width="400" height="400" xmlns="http://www.w3.org/2000/svg">
+          <rect width="400" height="400" fill="#f1f5f9"/>
+          <text x="200" y="200" font-family="Arial" font-size="20" text-anchor="middle" fill="#64748b">Photo Not Found</text>
+        </svg>
+      `;
+      res.set({
+        'Content-Type': 'image/svg+xml',
+        'Cache-Control': 'no-cache',
+        'Access-Control-Allow-Origin': '*',
+      });
+      return res.send(placeholderSvg);
+    }
+
+    // Try SharePoint first if SharePoint file ID exists (with timeout)
+    if (photo.sharePointFileId) {
+      try {
+        // Create a timeout promise
+        const timeoutPromise = new Promise((_, reject) => {
+          setTimeout(() => reject(new Error('SharePoint download timeout')), 3000); // 3 second timeout
+        });
+        
+        // Race between download and timeout
+        const downloadResult = await Promise.race([
+          sharePointService.downloadDocument(photo.sharePointFileId),
+          timeoutPromise
+        ]) as any;
         
         // Set appropriate headers with better caching and CORS support
         res.set({
           'Content-Type': downloadResult.mimeType || photo.mimeType || 'image/jpeg',
-          'Cache-Control': 'public, max-age=300', // Cache for 5 minutes (shorter for more responsive updates)
-          'Access-Control-Allow-Origin': process.env.FRONTEND_URL || '*',
+          'Cache-Control': 'public, max-age=3600', // Cache for 1 hour
+          'Access-Control-Allow-Origin': '*',
           'Access-Control-Allow-Methods': 'GET',
-          'ETag': `"photo-${photoId}-${Date.now()}"`,
+          'X-Content-Type-Options': 'nosniff',
         });
         
-        res.send(Buffer.from(downloadResult.content));
-        return;
+        // Ensure we're sending the buffer correctly
+        if (Buffer.isBuffer(downloadResult.content)) {
+          return res.send(downloadResult.content);
+        } else if (downloadResult.content instanceof ArrayBuffer) {
+          return res.send(Buffer.from(downloadResult.content));
+        } else {
+          // Try to convert to buffer
+          return res.send(Buffer.from(downloadResult.content));
+        }
       } catch (sharePointError) {
         logger.warn(`Failed to serve from SharePoint, trying local: ${photo.sharePointFileId}`, sharePointError);
       }
@@ -206,21 +347,47 @@ router.get('/serve/:photoId', onboardingReadRateLimit, async (req: Request, res:
     const filePath = path.join(process.cwd(), 'uploads', 'photos', photo.fileName);
     
     if (!fs.existsSync(filePath)) {
-      return res.status(404).json({ error: 'Photo file not found in any storage' });
+      // Return a placeholder image for missing files
+      const placeholderSvg = `
+        <svg width="400" height="400" xmlns="http://www.w3.org/2000/svg">
+          <rect width="400" height="400" fill="#fef2f2"/>
+          <text x="200" y="200" font-family="Arial" font-size="20" text-anchor="middle" fill="#dc2626">Image Not Available</text>
+        </svg>
+      `;
+      res.set({
+        'Content-Type': 'image/svg+xml',
+        'Cache-Control': 'no-cache',
+        'Access-Control-Allow-Origin': '*',
+      });
+      return res.send(placeholderSvg);
     }
 
     // Set appropriate headers for local file serving
     res.set({
       'Content-Type': photo.mimeType || 'image/jpeg',
-      'Cache-Control': 'public, max-age=300',
-      'Access-Control-Allow-Origin': process.env.FRONTEND_URL || '*',
+      'Cache-Control': 'public, max-age=3600',
+      'Access-Control-Allow-Origin': '*',
       'Access-Control-Allow-Methods': 'GET',
-      'ETag': `"local-${photoId}-${Date.now()}"`,
+      'X-Content-Type-Options': 'nosniff',
     });
-    res.sendFile(filePath);
+    return res.sendFile(filePath);
   } catch (error) {
     logger.error('Error serving photo:', error);
-    res.status(500).json({ error: 'Failed to serve photo' });
+    
+    // Return error placeholder image instead of JSON
+    const errorSvg = `
+      <svg width="400" height="400" xmlns="http://www.w3.org/2000/svg">
+        <rect width="400" height="400" fill="#fef2f2"/>
+        <text x="200" y="190" font-family="Arial" font-size="20" text-anchor="middle" fill="#dc2626">Error Loading Image</text>
+        <text x="200" y="220" font-family="Arial" font-size="14" text-anchor="middle" fill="#7f1d1d">${error instanceof Error ? error.message : 'Unknown error'}</text>
+      </svg>
+    `;
+    res.set({
+      'Content-Type': 'image/svg+xml',
+      'Cache-Control': 'no-cache',
+      'Access-Control-Allow-Origin': '*',
+    });
+    res.status(500).send(errorSvg);
   }
 });
 
