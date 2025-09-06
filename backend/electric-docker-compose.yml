@@ -1,0 +1,12 @@
+services:
+  electric:
+    image: electricsql/electric:latest
+    container_name: m1-villa-electric
+    environment:
+      ELECTRIC_WRITE_TO_PG_MODE: "logical_replication"
+      DATABASE_URL: "postgresql://electric:electric_password@localhost:5432/ils_m1_villa_management"
+      PG_PROXY_PASSWORD: "electric_password"
+      ELECTRIC_INSECURE: "true"
+      ELECTRIC_FEATURES: "proxy_queries"
+    network_mode: host
+    restart: unless-stopped

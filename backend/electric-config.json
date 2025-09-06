@@ -1,0 +1,105 @@
+{
+  "name": "m1-villa-management",
+  "description": "ElectricSQL configuration for M1 Villa Management System",
+  "electric": {
+    "service": {
+      "port": 5133,
+      "proxy": {
+        "port": 65432
+      }
+    },
+    "database": {
+      "url": "${ELECTRIC_DATABASE_URL}"
+    },
+    "auth": {
+      "mode": "secure",
+      "jwt_secret": "${JWT_SECRET}"
+    },
+    "replication": {
+      "postgres_slots": [
+        {
+          "name": "electric_replication_slot",
+          "output_plugin": "pgoutput"
+        }
+      ]
+    },
+    "sync": {
+      "tables": [
+        "Villa",
+        "Owner",
+        "ContractualDetails",
+        "BankDetails",
+        "OTACredentials",
+        "Staff",
+        "Photo",
+        "Document",
+        "Agreement",
+        "FacilityChecklist",
+        "OnboardingProgress",
+        "Partner",
+        "Booking",
+        "Commission",
+        "OnboardingSession",
+        "OnboardingStepProgress",
+        "SkippedItem",
+        "OnboardingBackup",
+        "AdminAction"
+      ],
+      "rules": {
+        "Villa": {
+          "read": "auth.role == 'admin' || auth.role == 'manager' || auth.villaId == row.id",
+          "write": "auth.role == 'admin' || auth.role == 'manager'"
+        },
+        "Owner": {
+          "read": "auth.role == 'admin' || auth.role == 'manager' || auth.villaId == row.villaId",
+          "write": "auth.role == 'admin' || auth.role == 'manager'"
+        },
+        "BankDetails": {
+          "read": "auth.role == 'admin' || (auth.role == 'owner' && auth.villaId == row.villaId)",
+          "write": "auth.role == 'admin'"
+        },
+        "Staff": {
+          "read": "auth.role == 'admin' || auth.role == 'manager' || auth.villaId == row.villaId",
+          "write": "auth.role == 'admin' || auth.role == 'manager'"
+        },
+        "Booking": {
+          "read": "auth.role == 'admin' || auth.role == 'manager' || auth.villaId == row.villaId || auth.partnerId == row.partnerId",
+          "write": "auth.role == 'admin' || auth.role == 'manager'"
+        },
+        "Commission": {
+          "read": "auth.role == 'admin' || auth.partnerId == row.partnerId",
+          "write": "auth.role == 'admin'"
+        },
+        "OnboardingSession": {
+          "read": "auth.role == 'admin' || auth.role == 'manager' || auth.villaId == row.villaId",
+          "write": "auth.role == 'admin' || auth.role == 'manager'"
+        },
+        "OnboardingStepProgress": {
+          "read": "auth.role == 'admin' || auth.role == 'manager' || auth.villaId == row.villaId",
+          "write": "auth.role == 'admin' || auth.role == 'manager'"
+        },
+        "SkippedItem": {
+          "read": "auth.role == 'admin' || auth.role == 'manager' || auth.villaId == row.villaId",
+          "write": "auth.role == 'admin' || auth.role == 'manager'"
+        },
+        "OnboardingBackup": {
+          "read": "auth.role == 'admin' || auth.role == 'manager' || auth.villaId == row.villaId",
+          "write": "auth.role == 'admin' || auth.role == 'manager'"
+        },
+        "AdminAction": {
+          "read": "auth.role == 'admin'",
+          "write": "auth.role == 'admin'"
+        }
+      }
+    },
+    "client": {
+      "migrations": {
+        "autoApply": true
+      },
+      "offline": {
+        "enabled": true,
+        "storage": "indexeddb"
+      }
+    }
+  }
+}
